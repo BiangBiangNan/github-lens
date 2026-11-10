@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Lens · 开源发现与增强搜索",
+  "version": "1.0.0",
+  "description": "聚合 GitHub Trending、近期高星项目，用可视化筛选增强仓库搜索，保存搜索与本地收藏。",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.github.com/*", "https://github.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "打开 GitHub Lens", "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" } },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_security_policy": { "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https://api.github.com https://github.com; object-src 'none'; frame-src 'none'; base-uri 'none';" }
+}

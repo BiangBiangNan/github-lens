@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {webcrypto} from 'node:crypto';
+let listener;
+let data={};
+let calls=[];
+let responder=async()=>new Response(JSON.stringify({items:[],total_count:0,incomplete_results:false}),{status:200});
+const delay=()=>new Promise(resolve=>setTimeout(resolve,5));
+globalThis.crypto??=webcrypto;
+globalThis.chrome={runtime:{id:'unit-extension',getURL:part=>'chrome-extension://unit-extension/'+part,onMessage:{addListener(fn){listener=fn;}}},action:{onClicked:{addListener(){}}},tabs:{},storage:{local:{async get(){await delay();return structuredClone(data);},async set(value){await delay();data={...data,...structuredClone(value)};}}}};
+globalThis.fetch=async(url,options)=>{calls.push({url,options});return responder(url,options);};
+await import('../background.js');
+const message=(payload,sender={id:'unit-extension'})=>new Promise(resolve=>listener(payload,sender,resolve));
+const search={type:'search',query:'topic:llm',sort:'stars',page:1};
+async function reset(){await message({type:'clear-cache'});calls=[];responder=async()=>new Response(JSON.stringify({items:[],total_count:0}),{status:200});}
+
+test('拒绝非本扩展消息来源',async()=>assert.equal((await message(search,{id:'other'})).ok,false));
+test('拒绝未知消息',async()=>assert.equal((await message({type:'evil',url:'https://evil.com'})).ok,false));
+test('拒绝非法排序/页码/查询',async()=>{for(const payload of [{...search,sort:'evil'},{...search,page:34},{...search,page:0},{...search,query:''}])assert.equal((await message(payload)).ok,false);});
+test('搜索使用固定域和URL编码且不发送凭证',async()=>{await reset();const result=await message({...search,query:'x &redirect=https://evil.com'});assert.equal(result.ok,true);const url=new URL(calls[0].url);assert.equal(url.origin,'https://api.github.com');assert.equal(url.searchParams.get('q'),'x &redirect=https://evil.com');assert.equal(calls[0].options.credentials,'omit');});
+test('重复搜索命中缓存',async()=>{await reset();await message(search);const result=await message(search);assert.equal(result.cached,true);assert.equal(calls.length,1);});
+test('合并正在进行中的同一请求',async()=>{await reset();responder=async()=>{await delay();return new Response(JSON.stringify({items:[],total_count:0}));};const result=await Promise.all([message(search),message(search)]);assert.equal(calls.length,1);assert.ok(result.every(r=>r.ok));});
+test('清空缓存后重新请求',async()=>{await reset();await message(search);await message({type:'clear-cache'});await message(search);assert.equal(calls.length,2);});
+test('限流返回重试时间',async()=>{await reset();responder=async()=>new Response('limit',{status:429,headers:{'Retry-After':'60'}});const result=await message(search);assert.equal(result.ok,false);assert.ok(result.retryAt>Date.now());});
+test('422返回查询错误而非假结果',async()=>{await reset();responder=async()=>new Response('invalid',{status:422});const result=await message(search);assert.equal(result.ok,false);assert.match(result.error,/查询/);});
+test('格式异常数据不会成功返回',async()=>{await reset();responder=async()=>new Response('{}');assert.equal((await message(search)).ok,false);});
+test('网络失败可见',async()=>{await reset();responder=async()=>{throw new Error('offline');};assert.match((await message(search)).error,/offline/);});
+test('趋势语言安全编码',async()=>{await reset();responder=async()=>new Response('<article class="Box-row">real</article>');const result=await message({type:'trending',language:'C#',since:'weekly'});assert.equal(result.ok,true);assert.match(calls[0].url,/trending\/c%23\?since=weekly/);assert.equal(calls[0].options.credentials,'omit');});
+test('拒绝趋势路径注入和非法周期',async()=>{for(const payload of [{type:'trending',language:'../../evil',since:'daily'},{type:'trending',language:'',since:'yearly'}])assert.equal((await message(payload)).ok,false);});
+test('串行并发收藏不会覆盖另一收藏',async()=>{data={favorites:{},saved:[]};const results=await Promise.all(['a/b','c/d','e/f'].map(full_name=>message({type:'data-mutate',operation:'toggle-favorite',repo:{full_name,stars:42}})));assert.ok(results.every(r=>r.ok));assert.equal(Object.keys(data.favorites).length,3);});
+test('失败的本地操作不会卡住后续队列',async()=>{assert.equal((await message({type:'data-mutate',operation:'toggle-favorite',repo:{full_name:'../evil'}})).ok,false);assert.equal((await message({type:'data-mutate',operation:'toggle-favorite',repo:{full_name:'safe/repo'}})).ok,true);});
+test('保存和删除搜索',async()=>{const entry={id:'test',name:'自定义搜索',options:{keyword:'x',language:'Zig',minStars:500}};assert.equal((await message({type:'data-mutate',operation:'save-search',entry})).ok,true);assert.equal(data.saved.at(-1).options.minStars,500);await message({type:'data-mutate',operation:'delete-search',id:'test'});assert.equal(data.saved.some(s=>s.id==='test'),false);});
+test('导入合并且不传播恶意链接',async()=>{await message({type:'data-mutate',operation:'import-backup',favorites:[{full_name:'import/repo',html_url:'https://evil.com'},{full_name:'../evil'}],saved:[]});assert.equal(data.favorites['import/repo'].html_url,'https://github.com/import/repo');assert.ok(data.favorites['safe/repo']);assert.equal(data.favorites['../evil'],undefined);});

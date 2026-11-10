@@ -1,0 +1,19 @@
+# Local credentials and machine-specific settings
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+.github-token
+
+# Generated packages and temporary browser profiles
+*.zip
+node_modules/
+__pycache__/
+*.pyc
+browser-profile/
+github-lens-artifacts/
+_github-publish-tools/
+.DS_Store
+Thumbs.db

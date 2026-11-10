@@ -1,0 +1,26 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildQuery,safeRepoUrl,normalizeRepo,formatNumber,relativeDate,LANGUAGES} from '../core.mjs';
+
+test('构建默认排除 Fork 和归档的高级查询',()=>assert.equal(buildQuery({keyword:'topic:llm'}),'topic:llm fork:false archived:false'));
+test('保留用户高级语法',()=>assert.equal(buildQuery({keyword:'"vector db" in:readme user:foo',includeForks:true,includeArchived:true}),'"vector db" in:readme user:foo'));
+test('全部可视筛选组合',()=>assert.equal(buildQuery({keyword:'tool',language:'C++',minStars:'1000',updatedWithin:'7',license:'mit'},new Date('2026-11-10T05:00:00Z')),'tool language:"C++" stars:>=1000 pushed:>=2026-11-03 license:mit fork:false archived:false'));
+test('只有筛选也可搜索',()=>assert.equal(buildQuery({minStars:0}),'stars:>=0 fork:false archived:false'));
+test('完全空查询拒绝',()=>assert.throws(()=>buildQuery({})));
+test('跨月日期',()=>assert.match(buildQuery({keyword:'a',updatedWithin:30},new Date('2026-03-05Z')),/pushed:>=2026-02-03/));
+test('支持所有界面语言',()=>['Python','C#','Jupyter Notebook','Zig'].forEach(language=>assert.ok(LANGUAGES.includes(language))));
+test('拒绝语言注入',()=>assert.throws(()=>buildQuery({keyword:'a',language:'Python" stars:>100'})));
+test('拒绝未知许可证',()=>assert.throws(()=>buildQuery({keyword:'a',license:'javascript:evil'})));
+test('拒绝负数小数和无穷星数',()=>[-1,1.2,Infinity,'1 OR x',Number.MAX_SAFE_INTEGER+1].forEach(minStars=>assert.throws(()=>buildQuery({keyword:'a',minStars}))));
+test('拒绝非法天数',()=>[1,'week',0].forEach(updatedWithin=>assert.throws(()=>buildQuery({keyword:'a',updatedWithin}))));
+test('布尔不能用字符串冒充',()=>assert.throws(()=>buildQuery({keyword:'a',includeForks:'false'})));
+test('合法仓库路径',()=>assert.equal(safeRepoUrl('owner/repo.js'),'https://github.com/owner/repo.js'));
+test('拒绝URL、路径遍历及多段路径',()=>['https://evil/a','a/../b','../a','a/..','a/.','/a/b','a/b/c','a/%2e%2e','a/b?x','a/b#x','a/b\\c','javascript:alert(1)',null,'a/'].forEach(input=>assert.equal(safeRepoUrl(input),null)));
+test('不传播恶意html_url',()=>assert.equal(normalizeRepo({full_name:'foo/bar',html_url:'javascript:alert(1)'}).html_url,'https://github.com/foo/bar'));
+test('空输入规范化',()=>{const repo=normalizeRepo(null);assert.equal(repo.stars,0);assert.equal(repo.html_url,'');assert.deepEqual(repo.topics,[]);});
+test('API仓库数字/许可证正确',()=>{const repo=normalizeRepo({id:1,full_name:'a/b',stargazers_count:200,forks_count:4,license:{spdx_id:'MIT'}});assert.equal(repo.stars,200);assert.equal(repo.forks,4);assert.equal(repo.license,'MIT');});
+test('本地收藏序列化后可无损恢复',()=>{const repo=normalizeRepo({id:1,full_name:'a/b',stargazers_count:200,forks_count:4,license:{spdx_id:'MIT'},language:'Python',topics:['llm'],updated_at:'2026-11-01Z'});assert.deepEqual(normalizeRepo(JSON.parse(JSON.stringify(repo))),repo);});
+test('畸形topic过滤及去重',()=>assert.deepEqual(normalizeRepo({topics:['llm',null,{},'llm','']}).topics,['llm']));
+test('非法数值/日期归零',()=>{const repo=normalizeRepo({stars:-1,forks:Infinity,updated_at:'not a date'});assert.equal(repo.stars,0);assert.equal(repo.forks,0);assert.equal(repo.updated_at,'');});
+test('中文数量格式',()=>{assert.equal(formatNumber(10000),'1万');assert.equal(formatNumber(123000000),'1.2亿');assert.equal(formatNumber(NaN),'—');});
+test('相对日期及无效日期',()=>{assert.equal(relativeDate('2026-11-09Z','2026-11-10Z'),'1天前');assert.equal(relativeDate('bad'),'未知');assert.equal(relativeDate('2027-01-01Z','2026-11-10Z'),'刚刚');});
